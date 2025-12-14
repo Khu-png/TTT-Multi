@@ -16,13 +16,14 @@ typedef struct match_t {
     int players[2]; // socket fds, 0 = empty
     int board[BOARD_N][BOARD_N]; // 0 empty, 1 player0, 2 player1
     int turn; // 0 or 1 -> index of player whose turn it is
+    int is_finished; // 1 if match ended, 0 otherwise
+    int winner; // 0 or 1 (player index), -1 if draw
     struct match_t *next;
 } match_t;
 
 static match_t *matches = NULL;
-static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define BACKLOG 10
 #define BUF_SIZE 4096
