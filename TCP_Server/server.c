@@ -41,6 +41,10 @@ static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define STR_SERVER_ERROR "500 SERVER_ERROR\r\n"
 
 
+// Match result codes
+#define STR_RESULT_INCONSISTENT "350 RESULT_FAIL inconsistent_state\r\n"
+#define STR_RESULT_INSUFFICIENT "351 RESULT_FAIL insufficient_moves\r\n"
+
 
 // Trim CRLF
 static void trim_crlf(char *s) {
