@@ -224,6 +224,12 @@ static int process_move(int client_sock, int match_id, int r, int c) {
         return -1;
     }
 
+    if (m->is_finished) {
+    pthread_mutex_unlock(&matches_mutex);
+    send_status(client_sock, "245 MOVE_FAIL match_ended\r\n");
+    return 0;
+    }
+
     if (m->turn != idx) {
         pthread_mutex_unlock(&matches_mutex);
         send_status(client_sock, "241 MOVE_FAIL not_your_turn\r\n");
