@@ -1,12 +1,10 @@
-// client.c
-// Compile: gcc client.c -o client
-// Usage: ./client <server_ip> <port>
-
+// ...existing code...
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #define BUF_SIZE 4096
 
@@ -23,6 +21,31 @@ ssize_t send_all(int sock, const char *buf, size_t len) {
 void trim_newline(char *s) {
     size_t n = strlen(s);
     while (n > 0 && (s[n-1]=='\n' || s[n-1]=='\r')) { s[n-1]='\0'; n--; }
+}
+
+// Global login flag updated by receiver thread
+volatile int logged_in = 0;
+
+// Receiver thread: đọc mọi thông điệp từ server và in ra
+void *recv_thread(void *arg) {
+    int sock = *(int*)arg;
+    free(arg);
+    char buf[BUF_SIZE];
+    while (1) {
+        ssize_t n = recv(sock, buf, sizeof(buf)-1, 0);
+        if (n <= 0) {
+            printf("\n[CLIENT] Disconnected from server\n");
+            exit(0);
+        }
+        buf[n] = '\0';
+        // cập nhật trạng thái đăng nhập nếu server trả về LOGIN_OK / LOGOUT_OK
+        if (strstr(buf, "LOGIN_OK")) logged_in = 1;
+        if (strstr(buf, "LOGOUT_OK")) logged_in = 0;
+        // In nguyên thông điệp nhận được
+        printf("\n[SERVER] %s", buf);
+        fflush(stdout);
+    }
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
@@ -45,16 +68,23 @@ int main(int argc, char *argv[]) {
         perror("connect"); return 1;
     }
 
+    // start receiver thread
+    int *psock = malloc(sizeof(int));
+    if (!psock) { perror("malloc"); close(sock); return 1; }
+    *psock = sock;
+    pthread_t rth;
+    pthread_create(&rth, NULL, recv_thread, psock);
+    pthread_detach(rth);
+
     char username[128], password[128];
     int choice;
-    int logged_in = 0;
 
     while (1) {
         printf("\n=== MENU ===\n");
         if (!logged_in) {
             printf("1. REGISTER\n2. LOGIN\n3. QUIT\nChoice: ");
         } else {
-            printf("1. LOGOUT\n2. QUIT\nChoice: ");
+            printf("1. LOGOUT\n2. MAKE MOVE\n3. QUIT\nChoice: ");
         }
         if (scanf("%d", &choice) != 1) { getchar(); continue; }
         getchar(); // consume newline
@@ -77,22 +107,27 @@ int main(int argc, char *argv[]) {
 
             send_all(sock, line, strlen(line));
 
-            char buf[BUF_SIZE];
-            ssize_t n = recv(sock, buf, sizeof(buf)-1, 0);
-            if (n <= 0) { printf("Disconnected from server\n"); break; }
-            buf[n] = '\0';
-            printf("Server response: %s", buf);
-
-            if (choice==2 && strstr(buf, "LOGIN_OK")) logged_in = 1;
-
+            // Chờ ngắn dò kết quả (recv_thread sẽ in kết quả và cập nhật logged_in)
+            int waited = 0;
+            while (choice==2 && !logged_in && waited < 2000) { usleep(100000); waited += 100; }
+            // Nếu đăng nhập không thành công, thông điệp lỗi đã được in bởi recv_thread
         } else { // logged_in menu
             if (choice==1) {
                 send_all(sock, "LOGOUT\r\n", 8);
-                char buf[BUF_SIZE];
-                ssize_t n = recv(sock, buf, sizeof(buf)-1, 0);
-                if (n>0) { buf[n]='\0'; printf("Server response: %s", buf); }
-                logged_in = 0;
-            } else if (choice==2) break;
+                // recv_thread sẽ in LOGOUT_OK và cập nhật logged_in
+                int waited = 0;
+                while (logged_in && waited < 2000) { usleep(100000); waited += 100; }
+            } else if (choice==2) {
+                int match_id, r, c;
+                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; }
+                printf("Row (0-based): "); if (scanf("%d", &r)!=1) { getchar(); printf("Invalid\n"); continue; }
+                printf("Col (0-based): "); if (scanf("%d", &c)!=1) { getchar(); printf("Invalid\n"); continue; }
+                getchar(); // consume newline
+                char line[BUF_SIZE];
+                snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", match_id, r, c);
+                send_all(sock, line, strlen(line));
+                // Kết quả (MOVE_OK, MOVE_FAIL, hoặc OPPONENT_MOVE từ server) sẽ được in bởi recv_thread
+            } else if (choice==3) break;
             else printf("Invalid choice\n");
         }
     }
@@ -101,4 +136,4 @@ int main(int argc, char *argv[]) {
     printf("Client exited.\n");
     return 0;
 }
-
+// ...existing code...

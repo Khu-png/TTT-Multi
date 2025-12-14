@@ -13,6 +13,7 @@
 #define BUF_SIZE 4096
 #define USERS_FILE "users.txt"
 
+
 // Status codes
 #define STR_LOGIN_OK "110 LOGIN_OK\r\n"
 #define STR_REGISTER_OK "120 REGISTER_OK\r\n"
@@ -22,8 +23,19 @@
 #define STR_REGISTER_FAIL_EMPTY "222 REGISTER_FAIL empty_field\r\n"
 #define STR_LOGOUT_OK "230 LOGOUT_OK\r\n"
 #define STR_SERVER_ERROR "500 SERVER_ERROR\r\n"
+#define BOARD_N 3 // size của bàn 
 
+typedef struct match_t {
+    int id;
+    int players[2]; // socket fds, 0 = empty
+    int board[BOARD_N][BOARD_N]; // 0 empty, 1 player0, 2 player1
+    int turn; // 0 or 1 -> index of player whose turn it is
+    struct match_t *next;
+} match_t;
+
+static match_t *matches = NULL;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 // Trim CRLF
 static void trim_crlf(char *s) {
@@ -90,8 +102,140 @@ void send_status(int client_sock, const char *msg) {
     send_all(client_sock, msg, strlen(msg));
 }
 
+static match_t *find_match_locked(int id) {
+    match_t *m = matches;
+    while (m) {
+        if (m->id == id) return m;
+        m = m->next;
+    }
+    return NULL;
+}
+
+static match_t *create_match_locked(int id) {
+    match_t *m = calloc(1, sizeof(match_t));
+    if (!m) return NULL;
+    m->id = id;
+    m->players[0] = m->players[1] = 0;
+    memset(m->board, 0, sizeof(m->board));
+    m->turn = 0;
+    m->next = matches;
+    matches = m;
+    return m;
+}
+
+// assign client socket to a match
+static int assign_player_to_match(int id, int sock) {
+    pthread_mutex_lock(&matches_mutex);
+    match_t *m = find_match_locked(id);
+    if (!m) m = create_match_locked(id);
+    if (!m) { pthread_mutex_unlock(&matches_mutex); return -2; }
+
+    if (m->players[0] == sock) { pthread_mutex_unlock(&matches_mutex); return 0; }
+    if (m->players[1] == sock) { pthread_mutex_unlock(&matches_mutex); return 1; }
+
+    if (m->players[0] == 0) { m->players[0] = sock; pthread_mutex_unlock(&matches_mutex); return 0; }
+    if (m->players[1] == 0) { m->players[1] = sock; pthread_mutex_unlock(&matches_mutex); return 1; }
+
+    pthread_mutex_unlock(&matches_mutex);
+    return -1; // full
+}
+
+static void remove_player_from_matches(int sock) {
+    pthread_mutex_lock(&matches_mutex);
+    match_t **pp = &matches;
+    while (*pp) {
+        match_t *m = *pp;
+        if (m->players[0] == sock) m->players[0] = 0;
+        if (m->players[1] == sock) m->players[1] = 0;
+
+        if (m->players[0] == 0 && m->players[1] == 0) {
+            *pp = m->next;
+            free(m);
+            continue;
+        }
+        pp = &m->next;
+    }
+    pthread_mutex_unlock(&matches_mutex);
+}
+static int process_move(int client_sock, int match_id, int r, int c) {
+    char buf[256];
+    pthread_mutex_lock(&matches_mutex);
+
+    match_t *m = find_match_locked(match_id);
+    if (!m) {
+        pthread_mutex_unlock(&matches_mutex);
+        send_status(client_sock, "240 MOVE_FAIL not_in_match\r\n");
+        return -1;
+    }
+
+    int idx = -1;
+    if (m->players[0] == client_sock) idx = 0;
+    else if (m->players[1] == client_sock) idx = 1;
+
+    if (idx == -1) {
+        pthread_mutex_unlock(&matches_mutex);
+        send_status(client_sock, "240 MOVE_FAIL not_in_match\r\n");
+        return -1;
+    }
+
+    if (m->turn != idx) {
+        pthread_mutex_unlock(&matches_mutex);
+        send_status(client_sock, "241 MOVE_FAIL not_your_turn\r\n");
+        return 0;
+    }
+
+    if (r < 0 || r >= BOARD_N || c < 0 || c >= BOARD_N) {
+        pthread_mutex_unlock(&matches_mutex);
+        send_status(client_sock, "242 MOVE_FAIL out_of_range\r\n");
+        return 0;
+    }
+
+    if (m->board[r][c] != 0) {
+        pthread_mutex_unlock(&matches_mutex);
+        send_status(client_sock, "243 MOVE_FAIL position_occupied\r\n");
+        return 0;
+    }
+
+    // apply move
+    m->board[r][c] = idx + 1;
+    m->turn = 1 - m->turn;
+    int opponent = m->players[1 - idx];
+
+    pthread_mutex_unlock(&matches_mutex);
+
+    send_status(client_sock, "150 MOVE_OK\r\n");
+
+    if (opponent != 0) {
+        snprintf(buf, sizeof(buf),
+                 "OPPONENT_MOVE match %d row %d col %d\r\n",
+                 match_id, r, c);
+        send_status(opponent, buf);
+    }
+    return 1;
+}
+
 // Handle a single line from client
 void handle_line(int client_sock, const char *line) {
+    // MOVE command
+    if (strncmp(line, "MOVE", 4) == 0) {
+        int match_id, r, c;
+        if (sscanf(line, "MOVE match %d row %d col %d",
+                   &match_id, &r, &c) == 3) {
+
+            int assigned = assign_player_to_match(match_id, client_sock);
+            if (assigned < -1) {
+                send_status(client_sock, STR_SERVER_ERROR);
+                return;
+            }
+            process_move(client_sock, match_id, r, c);
+            return;
+        } else {
+            send_status(client_sock, "244 MOVE_FAIL format_error\r\n");
+            return;
+        }
+    }
+
+    // REGISTER / LOGIN / LOGOUT (giữ nguyên)
     char cmd[16], u[128], p[128];
     if (sscanf(line, "%15s %127s %127s", cmd, u, p) < 1) {
         send_status(client_sock, STR_SERVER_ERROR);
@@ -99,13 +243,14 @@ void handle_line(int client_sock, const char *line) {
     }
 
     if (strcmp(cmd, "REGISTER") == 0) {
-        if (strlen(u)==0 || strlen(p)==0) { send_status(client_sock, STR_REGISTER_FAIL_EMPTY); return; }
+        if (strlen(u)==0 || strlen(p)==0) {
+            send_status(client_sock, STR_REGISTER_FAIL_EMPTY);
+            return;
+        }
         int r = register_user(u, p);
         if (r==1) send_status(client_sock, STR_REGISTER_OK);
         else if (r==0) send_status(client_sock, STR_REGISTER_FAIL_EXISTS);
-        else if (r==-2) send_status(client_sock, STR_REGISTER_FAIL_EMPTY);
         else send_status(client_sock, STR_SERVER_ERROR);
-        printf("[SERVER] REGISTER %s -> %d\n", u, r);
         return;
     }
 
@@ -114,18 +259,17 @@ void handle_line(int client_sock, const char *line) {
         if (r==1) send_status(client_sock, STR_LOGIN_OK);
         else if (r==-1) send_status(client_sock, STR_LOGIN_FAIL_PASSWORD);
         else send_status(client_sock, STR_LOGIN_FAIL_USERNAME);
-        printf("[SERVER] LOGIN %s -> %d\n", u, r);
         return;
     }
 
     if (strcmp(cmd, "LOGOUT") == 0) {
         send_status(client_sock, STR_LOGOUT_OK);
-        printf("[SERVER] LOGOUT client_sock=%d\n", client_sock);
         return;
     }
 
     send_status(client_sock, STR_SERVER_ERROR);
 }
+
 
 // Thread to handle client
 void *client_thread(void *arg) {
@@ -151,8 +295,10 @@ void *client_thread(void *arg) {
     }
 
     close(client_sock);
+    remove_player_from_matches(client_sock);
     printf("[SERVER] Client disconnected: sock=%d\n", client_sock);
     return NULL;
+
 }
 
 // Main function
