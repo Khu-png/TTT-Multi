@@ -23,6 +23,9 @@
 #define STR_REGISTER_FAIL_EMPTY "222 REGISTER_FAIL empty_field\r\n"
 #define STR_LOGOUT_OK "230 LOGOUT_OK\r\n"
 #define STR_SERVER_ERROR "500 SERVER_ERROR\r\n"
+// Match result codes
+#define STR_RESULT_INCONSISTENT "350 RESULT_FAIL inconsistent_state\r\n"
+#define STR_RESULT_INSUFFICIENT "351 RESULT_FAIL insufficient_moves\r\n"
 #define BOARD_N 3 // size của bàn 
 
 typedef struct match_t {
@@ -30,11 +33,14 @@ typedef struct match_t {
     int players[2]; // socket fds, 0 = empty
     int board[BOARD_N][BOARD_N]; // 0 empty, 1 player0, 2 player1
     int turn; // 0 or 1 -> index of player whose turn it is
+    int is_finished; // 1 if match ended, 0 otherwise
+    int winner; // 0 or 1 (player index), -1 if draw
     struct match_t *next;
 } match_t;
 
 static match_t *matches = NULL;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 // Trim CRLF
@@ -118,6 +124,8 @@ static match_t *create_match_locked(int id) {
     m->players[0] = m->players[1] = 0;
     memset(m->board, 0, sizeof(m->board));
     m->turn = 0;
+    m->is_finished = 0;
+    m->winner = -1;
     m->next = matches;
     matches = m;
     return m;
@@ -157,6 +165,41 @@ static void remove_player_from_matches(int sock) {
     }
     pthread_mutex_unlock(&matches_mutex);
 }
+
+// Check if a player has won (3 in a row/col/diag)
+static int check_win(match_t *m, int player_idx) {
+    int player_mark = player_idx + 1; // 1 or 2
+    // Check rows
+    for (int i = 0; i < BOARD_N; i++) {
+        int count = 0;
+        for (int j = 0; j < BOARD_N; j++) {
+            if (m->board[i][j] == player_mark) count++;
+        }
+        if (count == BOARD_N) return 1;
+    }
+    // Check columns
+    for (int j = 0; j < BOARD_N; j++) {
+        int count = 0;
+        for (int i = 0; i < BOARD_N; i++) {
+            if (m->board[i][j] == player_mark) count++;
+        }
+        if (count == BOARD_N) return 1;
+    }
+    // Check main diagonal (top-left to bottom-right)
+    int count = 0;
+    for (int i = 0; i < BOARD_N; i++) {
+        if (m->board[i][i] == player_mark) count++;
+    }
+    if (count == BOARD_N) return 1;
+    // Check anti-diagonal (top-right to bottom-left)
+    count = 0;
+    for (int i = 0; i < BOARD_N; i++) {
+        if (m->board[i][BOARD_N-1-i] == player_mark) count++;
+    }
+    if (count == BOARD_N) return 1;
+    return 0;
+}
+
 static int process_move(int client_sock, int match_id, int r, int c) {
     char buf[256];
     pthread_mutex_lock(&matches_mutex);
@@ -198,8 +241,17 @@ static int process_move(int client_sock, int match_id, int r, int c) {
 
     // apply move
     m->board[r][c] = idx + 1;
-    m->turn = 1 - m->turn;
     int opponent = m->players[1 - idx];
+    
+    // Check if current player wins
+    int is_win = check_win(m, idx);
+    
+    m->turn = 1 - m->turn;
+    
+    if (is_win) {
+        m->is_finished = 1;
+        m->winner = idx;
+    }
 
     pthread_mutex_unlock(&matches_mutex);
 
@@ -207,9 +259,31 @@ static int process_move(int client_sock, int match_id, int r, int c) {
 
     if (opponent != 0) {
         snprintf(buf, sizeof(buf),
-                 "OPPONENT_MOVE match %d row %d col %d\r\n",
-                 match_id, r, c);
+                 "OPPONENT_MOVE row %d col %d\r\n",
+                 r, c);
         send_status(opponent, buf);
+    }
+    
+    // If match finished, send result to both players and remove match
+    if (is_win) {
+        snprintf(buf, sizeof(buf), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
+        send_status(client_sock, buf);
+        if (opponent != 0) {
+            send_status(opponent, buf);
+        }
+        // Remove match from list
+        pthread_mutex_lock(&matches_mutex);
+        match_t **pp = &matches;
+        while (*pp) {
+            if ((*pp)->id == match_id) {
+                match_t *tmp = *pp;
+                *pp = tmp->next;
+                free(tmp);
+                break;
+            }
+            pp = &(*pp)->next;
+        }
+        pthread_mutex_unlock(&matches_mutex);
     }
     return 1;
 }
