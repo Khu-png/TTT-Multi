@@ -9,6 +9,21 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 
+#define BOARD_N 3 // size của bàn 
+
+typedef struct match_t {
+    int id;
+    int players[2]; // socket fds, 0 = empty
+    int board[BOARD_N][BOARD_N]; // 0 empty, 1 player0, 2 player1
+    int turn; // 0 or 1 -> index of player whose turn it is
+    struct match_t *next;
+} match_t;
+
+static match_t *matches = NULL;
+static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 #define BACKLOG 10
 #define BUF_SIZE 4096
 #define USERS_FILE "users.txt"
@@ -23,18 +38,7 @@
 #define STR_REGISTER_FAIL_EMPTY "222 REGISTER_FAIL empty_field\r\n"
 #define STR_LOGOUT_OK "230 LOGOUT_OK\r\n"
 #define STR_SERVER_ERROR "500 SERVER_ERROR\r\n"
-#define BOARD_N 3 // size của bàn 
 
-typedef struct match_t {
-    int id;
-    int players[2]; // socket fds, 0 = empty
-    int board[BOARD_N][BOARD_N]; // 0 empty, 1 player0, 2 player1
-    int turn; // 0 or 1 -> index of player whose turn it is
-    struct match_t *next;
-} match_t;
-
-static match_t *matches = NULL;
-pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 // Trim CRLF
