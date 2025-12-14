@@ -122,6 +122,8 @@ static match_t *create_match_locked(int id) {
     m->players[0] = m->players[1] = 0;
     memset(m->board, 0, sizeof(m->board));
     m->turn = 0;
+    m->is_finished = 0;
+    m->winner = -1;
     m->next = matches;
     matches = m;
     return m;
@@ -161,6 +163,41 @@ static void remove_player_from_matches(int sock) {
     }
     pthread_mutex_unlock(&matches_mutex);
 }
+
+// Check if a player has won (3 in a row/col/diag)
+static int check_win(match_t *m, int player_idx) {
+    int player_mark = player_idx + 1; // 1 or 2
+    // Check rows
+    for (int i = 0; i < BOARD_N; i++) {
+        int count = 0;
+        for (int j = 0; j < BOARD_N; j++) {
+            if (m->board[i][j] == player_mark) count++;
+        }
+        if (count == BOARD_N) return 1;
+    }
+    // Check columns
+    for (int j = 0; j < BOARD_N; j++) {
+        int count = 0;
+        for (int i = 0; i < BOARD_N; i++) {
+            if (m->board[i][j] == player_mark) count++;
+        }
+        if (count == BOARD_N) return 1;
+    }
+    // Check main diagonal (top-left to bottom-right)
+    int count = 0;
+    for (int i = 0; i < BOARD_N; i++) {
+        if (m->board[i][i] == player_mark) count++;
+    }
+    if (count == BOARD_N) return 1;
+    // Check anti-diagonal (top-right to bottom-left)
+    count = 0;
+    for (int i = 0; i < BOARD_N; i++) {
+        if (m->board[i][BOARD_N-1-i] == player_mark) count++;
+    }
+    if (count == BOARD_N) return 1;
+    return 0;
+}
+
 static int process_move(int client_sock, int match_id, int r, int c) {
     char buf[256];
     pthread_mutex_lock(&matches_mutex);
@@ -202,8 +239,17 @@ static int process_move(int client_sock, int match_id, int r, int c) {
 
     // apply move
     m->board[r][c] = idx + 1;
-    m->turn = 1 - m->turn;
     int opponent = m->players[1 - idx];
+    
+    // Check if current player wins
+    int is_win = check_win(m, idx);
+    
+    m->turn = 1 - m->turn;
+    
+    if (is_win) {
+        m->is_finished = 1;
+        m->winner = idx;
+    }
 
     pthread_mutex_unlock(&matches_mutex);
 
@@ -211,9 +257,31 @@ static int process_move(int client_sock, int match_id, int r, int c) {
 
     if (opponent != 0) {
         snprintf(buf, sizeof(buf),
-                 "OPPONENT_MOVE match %d row %d col %d\r\n",
-                 match_id, r, c);
+                 "OPPONENT_MOVE row %d col %d\r\n",
+                 r, c);
         send_status(opponent, buf);
+    }
+    
+    // If match finished, send result to both players and remove match
+    if (is_win) {
+        snprintf(buf, sizeof(buf), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
+        send_status(client_sock, buf);
+        if (opponent != 0) {
+            send_status(opponent, buf);
+        }
+        // Remove match from list
+        pthread_mutex_lock(&matches_mutex);
+        match_t **pp = &matches;
+        while (*pp) {
+            if ((*pp)->id == match_id) {
+                match_t *tmp = *pp;
+                *pp = tmp->next;
+                free(tmp);
+                break;
+            }
+            pp = &(*pp)->next;
+        }
+        pthread_mutex_unlock(&matches_mutex);
     }
     return 1;
 }
