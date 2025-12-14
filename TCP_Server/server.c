@@ -39,10 +39,8 @@ static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define STR_REGISTER_FAIL_EMPTY "222 REGISTER_FAIL empty_field\r\n"
 #define STR_LOGOUT_OK "230 LOGOUT_OK\r\n"
 #define STR_SERVER_ERROR "500 SERVER_ERROR\r\n"
-// Match result codes
-#define STR_RESULT_INCONSISTENT "350 RESULT_FAIL inconsistent_state\r\n"
-#define STR_RESULT_INSUFFICIENT "351 RESULT_FAIL insufficient_moves\r\n"
-#define BOARD_N 3 // size của bàn 
+
+
 
 // Trim CRLF
 static void trim_crlf(char *s) {
