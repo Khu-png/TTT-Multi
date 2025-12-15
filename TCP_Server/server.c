@@ -9,16 +9,16 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 
-#define BOARD_N 3 // size của bàn cờ
+#define BOARD_N 3 
 
-typedef struct match_t {    // cấu trúc lưu trữ thông tin trận đấu
-    int id; // id của trận đấu
-    int players[2]; // socket của 2 người chơi (player[0], player[1])
-    int board[BOARD_N][BOARD_N]; // size board 3x3 theo define o trên   
-    int turn; // 0 or 1 -> index of player whose turn it is
-    int is_finished; // 1 if match ended, 0 otherwise
-    int winner; // 0 or 1 (player index), -1 if draw
-    struct match_t *next; // con trỏ đến trận đấu tiếp theo trong danh sách
+typedef struct match_t {    
+    int id; 
+    int players[2]; 
+    int board[BOARD_N][BOARD_N];    
+    int turn; 
+    int is_finished; 
+    int winner; 
+    struct match_t *next; 
 } match_t;
 
 static match_t *matches = NULL; // danh sách các trận đấu hiện có
@@ -120,11 +120,12 @@ static match_t *find_match_locked(int id) {
     return NULL;
 }
 
+// create a new match and add to list
 static match_t *create_match_locked(int id) {
-    match_t *m = calloc(1, sizeof(match_t));
-    if (!m) return NULL;
+    match_t *m = calloc(1, sizeof(match_t)); 
+    if (!m) return NULL; 
     m->id = id;
-    m->players[0] = m->players[1] = 0;
+    m->players[0] = m->players[1] = 0; 
     memset(m->board, 0, sizeof(m->board));
     m->turn = 0;
     m->is_finished = 0;

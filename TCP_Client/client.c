@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
                 while (logged_in && waited < 2000) { usleep(100000); waited += 100; }
             } else if (choice==2) {
                 int match_id, r, c;
-                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; }
+                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; } // neu scanf loi, loai bo ki tu thua
                 printf("Row (0-based): "); if (scanf("%d", &r)!=1) { getchar(); printf("Invalid\n"); continue; }
                 printf("Col (0-based): "); if (scanf("%d", &c)!=1) { getchar(); printf("Invalid\n"); continue; }
                 getchar(); // consume newline
