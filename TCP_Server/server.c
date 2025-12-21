@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <time.h>
+#include <stdarg.h>
 
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static FILE *log_file = NULL;
@@ -56,6 +57,25 @@ static void trim_crlf(char *s) {
     while (n > 0 && (s[n-1]=='\n' || s[n-1]=='\r')) { s[n-1]='\0'; n--; }
 }
 
+// Log message with timestamp
+static void log_message(const char *format, ...) {
+    pthread_mutex_lock(&log_mutex);
+    if (log_file) {
+        time_t now = time(NULL);
+        struct tm *timeinfo = localtime(&now);
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", timeinfo);
+        fprintf(log_file, "[%s] ", timestamp);
+        va_list args;
+        va_start(args, format);
+        vfprintf(log_file, format, args);
+        va_end(args);
+        fprintf(log_file, "\n");
+        fflush(log_file);
+    }
+    pthread_mutex_unlock(&log_mutex);
+}
+
 // Check if username exists
 int user_exists(const char *username) {
     FILE *f = fopen(USERS_FILE, "r");
@@ -88,14 +108,26 @@ int check_user_pass(const char *username, const char *password) {
 
 // Register user
 int register_user(const char *username, const char *password) {
-    if (strlen(username)==0 || strlen(password)==0) return -2; // empty
+    if (strlen(username)==0 || strlen(password)==0) {
+        log_message("REGISTER FAIL: empty fields for user: %s", username);
+        return -2; // empty
+    }
     pthread_mutex_lock(&users_mutex);
-    if (user_exists(username)) { pthread_mutex_unlock(&users_mutex); return 0; }
+    if (user_exists(username)) {
+        pthread_mutex_unlock(&users_mutex);
+        log_message("REGISTER FAIL: user already exists: %s", username);
+        return 0;
+    }
     FILE *f = fopen(USERS_FILE, "a");
-    if (!f) { pthread_mutex_unlock(&users_mutex); return -1; }
+    if (!f) {
+        pthread_mutex_unlock(&users_mutex);
+        log_message("REGISTER FAIL: cannot open users file for user: %s", username);
+        return -1;
+    }
     fprintf(f, "%s %s\n", username, password);
     fclose(f);
     pthread_mutex_unlock(&users_mutex);
+    log_message("REGISTER OK: %s", username);
     return 1;
 }
 
@@ -240,18 +272,21 @@ static int process_move(int client_sock, int match_id, int r, int c) { // xử l
 
     if (m->turn != idx) { // không phải lượt của người chơi
         pthread_mutex_unlock(&matches_mutex);
+        log_message("MOVE FAIL: not your turn (sock=%d, match_id=%d)", client_sock, match_id);
         send_status(client_sock, "241 MOVE_FAIL not_your_turn\r\n");
         return 0;
     }
 
     if (r < 0 || r >= BOARD_N || c < 0 || c >= BOARD_N) { // vị trí ngoài phạm vi
         pthread_mutex_unlock(&matches_mutex);
+        log_message("MOVE FAIL: out of range (sock=%d, match_id=%d, row=%d, col=%d)", client_sock, match_id, r, c);
         send_status(client_sock, "242 MOVE_FAIL out_of_range\r\n");
         return 0;
     }
 
     if (m->board[r][c] != 0) { // vị trí đã có người đánh
         pthread_mutex_unlock(&matches_mutex);
+        log_message("MOVE FAIL: position occupied (sock=%d, match_id=%d, row=%d, col=%d)", client_sock, match_id, r, c);
         send_status(client_sock, "243 MOVE_FAIL position_occupied\r\n");
         return 0;
     }
@@ -268,9 +303,12 @@ static int process_move(int client_sock, int match_id, int r, int c) { // xử l
     
     m->turn = 1 - m->turn; // chuyển lượt sang người chơi khác
     
+    log_message("MOVE OK: player %d at row=%d col=%d (match_id=%d, sock=%d)", idx, r, c, match_id, client_sock);
+    
     if (is_win) {
         m->is_finished = 1; // đánh dấu trận đấu kết thúc
         m->winner = idx; // lưu chỉ số người chơi thắng
+        log_message("MATCH RESULT: player %d wins (match_id=%d)", idx, match_id);
     }
 
     pthread_mutex_unlock(&matches_mutex);
@@ -350,14 +388,24 @@ void handle_line(int client_sock, const char *line) {
 
     if (strcmp(cmd, "LOGIN") == 0) {
         int r = check_user_pass(u, p);
-        if (r==1) send_status(client_sock, STR_LOGIN_OK);
-        else if (r==-1) send_status(client_sock, STR_LOGIN_FAIL_PASSWORD);
-        else send_status(client_sock, STR_LOGIN_FAIL_USERNAME);
+        if (r==1) {
+            send_status(client_sock, STR_LOGIN_OK);
+            log_message("LOGIN OK: %s (sock=%d)", u, client_sock);
+        }
+        else if (r==-1) {
+            send_status(client_sock, STR_LOGIN_FAIL_PASSWORD);
+            log_message("LOGIN FAIL: wrong password for user: %s", u);
+        }
+        else {
+            send_status(client_sock, STR_LOGIN_FAIL_USERNAME);
+            log_message("LOGIN FAIL: user not found: %s", u);
+        }
         return;
     }
 
     if (strcmp(cmd, "LOGOUT") == 0) {
         send_status(client_sock, STR_LOGOUT_OK);
+        log_message("LOGOUT: user disconnected (sock=%d)", client_sock);
         return;
     }
 
@@ -390,6 +438,7 @@ void *client_thread(void *arg) {
 
     close(client_sock);
     remove_player_from_matches(client_sock);
+    log_message("CLIENT DISCONNECTED: sock=%d", client_sock);
     printf("[SERVER] Client disconnected: sock=%d\n", client_sock);
     return NULL;
 
@@ -399,6 +448,14 @@ void *client_thread(void *arg) {
 int main(int argc, char *argv[]) {
     if (argc<2) { fprintf(stderr,"Usage: %s <port>\n", argv[0]); return 1; }
     int port = atoi(argv[1]);
+
+    // Initialize log file
+    log_file = fopen("server.log", "a");
+    if (log_file) {
+        log_message("===== SERVER STARTED on port %d =====", port);
+    } else {
+        fprintf(stderr, "Warning: cannot open log file server.log\n");
+    }
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("socket"); return 1; }
@@ -417,6 +474,7 @@ int main(int argc, char *argv[]) {
 
     if (listen(server_fd, BACKLOG)<0) { perror("listen"); close(server_fd); return 1; }
 
+    log_message("SERVER LISTENING on port %d", port);
     printf("[SERVER] Listening on port %d...\n", port);
 
     while(1) {
@@ -429,6 +487,7 @@ int main(int argc, char *argv[]) {
 
         char ipstr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &cli_addr.sin_addr, ipstr, sizeof(ipstr));
+        log_message("CLIENT CONNECTED: %s:%d (sock=%d)", ipstr, ntohs(cli_addr.sin_port), *client_sock);
         printf("[SERVER] Client connected: %s:%d\n", ipstr, ntohs(cli_addr.sin_port));
 
         pthread_t th;
@@ -437,6 +496,10 @@ int main(int argc, char *argv[]) {
     }
 
     close(server_fd);
+    if (log_file) {
+        log_message("===== SERVER STOPPED =====");
+        fclose(log_file);
+    }
     return 0;
 }
 
