@@ -8,6 +8,10 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <time.h>
+
+static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static FILE *log_file = NULL;
 
 #define BOARD_N 3 
 
