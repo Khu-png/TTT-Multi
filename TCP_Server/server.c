@@ -452,7 +452,7 @@ int main(int argc, char *argv[]) {
     // Initialize log file
     log_file = fopen("server.log", "a");
     if (log_file) {
-        log_message("===== SERVER STARTED on port %d =====", port);
+        log_message("SERVER STARTED on port %d", port);
     } else {
         fprintf(stderr, "Warning: cannot open log file server.log\n");
     }
@@ -497,7 +497,7 @@ int main(int argc, char *argv[]) {
 
     close(server_fd);
     if (log_file) {
-        log_message("===== SERVER STOPPED =====");
+        log_message("SERVER STOPPED");
         fclose(log_file);
     }
     return 0;
