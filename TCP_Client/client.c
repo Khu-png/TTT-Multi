@@ -118,14 +118,14 @@ int main(int argc, char *argv[]) {
                 while (logged_in && waited < 2000) { usleep(100000); waited += 100; }
             } else if (choice==2) {
                 int match_id, r, c;
-                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; } // neu scanf loi, loai bo ki tu thua
+                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; } 
                 printf("Row (0-based): "); if (scanf("%d", &r)!=1) { getchar(); printf("Invalid\n"); continue; }
                 printf("Col (0-based): "); if (scanf("%d", &c)!=1) { getchar(); printf("Invalid\n"); continue; }
-                getchar(); // consume newline
+                getchar(); 
                 char line[BUF_SIZE];
                 snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", match_id, r, c);
                 send_all(sock, line, strlen(line));
-                // Kết quả (MOVE_OK, MOVE_FAIL, hoặc OPPONENT_MOVE từ server) sẽ được in bởi recv_thread
+               
             } else if (choice==3) break;
             else printf("Invalid choice\n");
         }
