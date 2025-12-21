@@ -26,9 +26,9 @@ typedef struct match_t {
     struct match_t *next; 
 } match_t;
 
-static match_t *matches = NULL; // danh sách các trận đấu hiện có
-pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER; // mutex cho file users.txt
-static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER; // mutex cho danh sách trận đấu
+static match_t *matches = NULL; 
+pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER; 
+static pthread_mutex_t matches_mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 #define BACKLOG 10
 #define BUF_SIZE 4096
@@ -208,7 +208,7 @@ static void remove_player_from_matches(int sock) {
 
 // Check if a player has won (3 in a row/col/diag)
 static int check_win(match_t *m, int player_idx) {
-    int player_mark = player_idx + 1; // 1 or 2
+    int player_mark = player_idx + 1; 
     // Check rows
     for (int i = 0; i < BOARD_N; i++) {
         int count = 0;
@@ -217,7 +217,6 @@ static int check_win(match_t *m, int player_idx) {
         }
         if (count == BOARD_N) return 1;
     }
-    // dem 3 o trong 1 hang, neu 3 o deu la cua 1 player thi player do thang 
 
     // Check columns
     for (int j = 0; j < BOARD_N; j++) {
@@ -227,7 +226,7 @@ static int check_win(match_t *m, int player_idx) {
         }
         if (count == BOARD_N) return 1;
     }
-    // dem 3 o trong 1 cot, neu 3 o deu la cua 1 player thi player do thang 
+  
 
     // Check main diagonal (top-left to bottom-right)
     int count = 0;
@@ -235,7 +234,7 @@ static int check_win(match_t *m, int player_idx) {
         if (m->board[i][i] == player_mark) count++;
     }
     if (count == BOARD_N) return 1;
-    // dem 3 o tren duong cheo chinh, neu 3 o deu la cua 1 player thi player do thang
+
 
     // Check anti-diagonal (top-right to bottom-left)
     count = 0;
@@ -243,86 +242,74 @@ static int check_win(match_t *m, int player_idx) {
         if (m->board[i][BOARD_N-1-i] == player_mark) count++;
     }
     if (count == BOARD_N) return 1;
-    // dem 3 o tren duong cheo phu, neu 3 o deu la cua 1 player thi player do thang
-
     return 0;
 }
 
+// Process MOVE command
+static int process_move(int client_sock, int match_id, int r, int c) { 
+    char buf[256]; 
+    pthread_mutex_lock(&matches_mutex); 
 
-static int process_move(int client_sock, int match_id, int r, int c) { // xử lý nước đi
-    char buf[256]; // buffer để gửi thông báo
-    pthread_mutex_lock(&matches_mutex); // khóa mutex danh sách trận đấu
-
-    match_t *m = find_match_locked(match_id); // tìm trận đấu theo id
-    if (!m) { // không tìm thấy trận đấu
-        pthread_mutex_unlock(&matches_mutex); // mở khóa mutex
-        send_status(client_sock, "240 MOVE_FAIL not_in_match\r\n"); // gửi lỗi không trong trận đấu
+    match_t *m = find_match_locked(match_id); 
+    if (!m) { 
+        pthread_mutex_unlock(&matches_mutex); 
+        send_status(client_sock, "240 MOVE_FAIL not_in_match\r\n"); 
         return -1;
     }
 
     int idx = -1; 
-    if (m->players[0] == client_sock) idx = 0; // xác định chỉ số người chơi
-    else if (m->players[1] == client_sock) idx = 1; // xác định chỉ số người chơi
+    if (m->players[0] == client_sock) idx = 0; 
+    else if (m->players[1] == client_sock) idx = 1; 
 
-    if (idx == -1) { // người chơi không thuộc trận đấu
+    if (idx == -1) { 
         pthread_mutex_unlock(&matches_mutex);
         send_status(client_sock, "240 MOVE_FAIL not_in_match\r\n");
         return -1;
     }
 
-    if (m->turn != idx) { // không phải lượt của người chơi
+    if (m->turn != idx) { 
         pthread_mutex_unlock(&matches_mutex);
         log_message("MOVE FAIL: not your turn (sock=%d, match_id=%d)", client_sock, match_id);
         send_status(client_sock, "241 MOVE_FAIL not_your_turn\r\n");
         return 0;
     }
 
-    if (r < 0 || r >= BOARD_N || c < 0 || c >= BOARD_N) { // vị trí ngoài phạm vi
+    if (r < 0 || r >= BOARD_N || c < 0 || c >= BOARD_N) { 
         pthread_mutex_unlock(&matches_mutex);
         log_message("MOVE FAIL: out of range (sock=%d, match_id=%d, row=%d, col=%d)", client_sock, match_id, r, c);
         send_status(client_sock, "242 MOVE_FAIL out_of_range\r\n");
         return 0;
     }
 
-    if (m->board[r][c] != 0) { // vị trí đã có người đánh
+    if (m->board[r][c] != 0) { 
         pthread_mutex_unlock(&matches_mutex);
         log_message("MOVE FAIL: position occupied (sock=%d, match_id=%d, row=%d, col=%d)", client_sock, match_id, r, c);
         send_status(client_sock, "243 MOVE_FAIL position_occupied\r\n");
         return 0;
     }
 
-    // apply move
-    m->board[r][c] = idx + 1; // đánh dấu vị trí trên bàn cờ
-    // quy uoc: player 0 -> mark 1, player 1 -> mark 2, empty -> 0
-    int opponent = m->players[1 - idx]; // lấy socket đối thủ
-    // idx = 0 -> opponent = players[1]
-    // idx = 1 -> opponent = players[0]
-
-    // Check if current player wins
-    int is_win = check_win(m, idx); // kiểm tra người chơi hiện tại thắng
-    
-    m->turn = 1 - m->turn; // chuyển lượt sang người chơi khác
-    
+    // Make the move
+    m->board[r][c] = idx + 1;
+    int opponent = m->players[1 - idx];
+    int is_win = check_win(m, idx); 
+    m->turn = 1 - m->turn; 
     log_message("MOVE OK: player %d at row=%d col=%d (match_id=%d, sock=%d)", idx, r, c, match_id, client_sock);
     
     if (is_win) {
-        m->is_finished = 1; // đánh dấu trận đấu kết thúc
-        m->winner = idx; // lưu chỉ số người chơi thắng
+        m->is_finished = 1; 
+        m->winner = idx; 
         log_message("MATCH RESULT: player %d wins (match_id=%d)", idx, match_id);
     }
 
     pthread_mutex_unlock(&matches_mutex);
 
-    send_status(client_sock, "150 MOVE_OK\r\n"); // gửi xác nhận nước đi thành công
+    send_status(client_sock, "150 MOVE_OK\r\n");
 
-    if (opponent != 0) { // nếu có đối thủ, gửi thông báo nước đi cho đối thủ
-        snprintf(buf, sizeof(buf), 
-                 "OPPONENT_MOVE row %d col %d\r\n",
-                 r, c); //snprintf de tranh tran bo nho
-        send_status(opponent, buf); // gửi thông báo nước đi cho đối thủ
+    if (opponent != 0) { 
+        snprintf(buf, sizeof(buf), "OPPONENT_MOVE row %d col %d\r\n", r, c);
+        send_status(opponent, buf); 
     }
     
-    // If match finished, send result to both players and remove match
     if (is_win) {
         snprintf(buf, sizeof(buf), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
         send_status(client_sock, buf);
@@ -330,18 +317,18 @@ static int process_move(int client_sock, int match_id, int r, int c) { // xử l
             send_status(opponent, buf);
         }
         // Remove match from list
-        pthread_mutex_lock(&matches_mutex); // khóa mutex danh sách trận đấu
-        match_t **pp = &matches; // con trỏ đến con trỏ đầu danh sách
-        while (*pp) { // duyệt danh sách trận đấu
-            if ((*pp)->id == match_id) { // tìm thấy trận đấu cần xóa
-                match_t *tmp = *pp; // lưu trữ tạm thời con trỏ trận đấu
-                *pp = tmp->next; // bỏ qua trận đấu trong danh sách
-                free(tmp); // giải phóng bộ nhớ
+        pthread_mutex_lock(&matches_mutex); 
+        match_t **pp = &matches; 
+        while (*pp) { 
+            if ((*pp)->id == match_id) { 
+                match_t *tmp = *pp; 
+                *pp = tmp->next; 
+                free(tmp); 
                 break;
             }
-            pp = &(*pp)->next; // chuyển sang trận đấu tiếp theo
+            pp = &(*pp)->next; 
         }
-        pthread_mutex_unlock(&matches_mutex); // mở khóa mutex
+        pthread_mutex_unlock(&matches_mutex);
     }
     return 1;
 }
