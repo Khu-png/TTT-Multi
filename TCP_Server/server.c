@@ -354,7 +354,7 @@ void handle_line(int client_sock, const char *line) {
         }
     }
 
-    // REGISTER / LOGIN / LOGOUT (giữ nguyên)
+    // REGISTER / LOGIN / LOGOUT
     char cmd[16], u[128], p[128];
     if (sscanf(line, "%15s %127s %127s", cmd, u, p) < 1) {
         send_status(client_sock, STR_SERVER_ERROR);
