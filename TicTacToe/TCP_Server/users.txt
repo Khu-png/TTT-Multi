@@ -1,0 +1,6 @@
+admin abc 1000
+khanh 5865 0
+
+hoang 4854 1000
+khuse 123 1000
+user 123 1000
