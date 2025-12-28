@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
                 snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", match_id, r, c);
                 send_all(sock, line, strlen(line));
             } else if (choice==3) {
-                // STOP - stop/cancel match
+                // STOP
                 int match_id;
                 printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; }
                 getchar();
