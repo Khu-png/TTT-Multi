@@ -83,7 +83,7 @@ int main(int argc, char *argv[]) {
         if (!logged_in) {
             printf("1. REGISTER\n2. LOGIN\n3. QUIT\nChoice: ");
         } else {
-            printf("1. LOGOUT\n2. MAKE MOVE\n3. QUIT\nChoice: ");
+            printf("1. LOGOUT\n2. MAKE MOVE\n3. STOP\n4. QUIT\nChoice: ");
         }
         if (scanf("%d", &choice) != 1) { getchar(); continue; }
         getchar(); // consume newline
@@ -125,8 +125,15 @@ int main(int argc, char *argv[]) {
                 char line[BUF_SIZE];
                 snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", match_id, r, c);
                 send_all(sock, line, strlen(line));
-               
-            } else if (choice==3) break;
+            } else if (choice==3) {
+                // STOP - stop/cancel match
+                int match_id;
+                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; }
+                getchar();
+                char line[BUF_SIZE];
+                snprintf(line, sizeof(line), "STOP match %d\r\n", match_id);
+                send_all(sock, line, strlen(line));
+            } else if (choice==4) break;
             else printf("Invalid choice\n");
         }
     }

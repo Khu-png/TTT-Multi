@@ -311,10 +311,15 @@ static int process_move(int client_sock, int match_id, int r, int c) {
     }
     
     if (is_win) {
-        snprintf(buf, sizeof(buf), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
-        send_status(client_sock, buf);
+        char winner_msg[256];
+        char loser_msg[256];
+        snprintf(winner_msg, sizeof(winner_msg), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
+        snprintf(loser_msg, sizeof(loser_msg), "160 MATCH_RESULT id %d result LOSE\r\n", match_id);
+        /* send WIN to the mover (winner) */
+        send_status(client_sock, winner_msg);
+        /* send LOSE to the opponent if present */
         if (opponent != 0) {
-            send_status(opponent, buf);
+            send_status(opponent, loser_msg);
         }
         // Remove match from list
         pthread_mutex_lock(&matches_mutex); 
@@ -330,58 +335,6 @@ static int process_move(int client_sock, int match_id, int r, int c) {
         }
         pthread_mutex_unlock(&matches_mutex);
     }
-    return 1;
-}
-
-// Process RESULT command - log game result
-static int process_result(int client_sock, int match_id, const char *result) {
-    if (strlen(result) == 0) {
-        send_status(client_sock, "350 RESULT_FAIL format_error\r\n");
-        return -1;
-    }
-    
-    pthread_mutex_lock(&matches_mutex);
-    match_t *m = find_match_locked(match_id);
-    if (!m) {
-        pthread_mutex_unlock(&matches_mutex);
-        log_message("RESULT FAIL: match not found (match_id=%d)", match_id);
-        send_status(client_sock, "350 RESULT_FAIL match_not_found\r\n");
-        return -1;
-    }
-    
-    int idx = -1;
-    if (m->players[0] == client_sock) idx = 0;
-    else if (m->players[1] == client_sock) idx = 1;
-    
-    if (idx == -1) {
-        pthread_mutex_unlock(&matches_mutex);
-        log_message("RESULT FAIL: player not in match (match_id=%d)", match_id);
-        send_status(client_sock, "350 RESULT_FAIL not_in_match\r\n");
-        return -1;
-    }
-    
-    if (!m->is_finished) {
-        pthread_mutex_unlock(&matches_mutex);
-        log_message("RESULT FAIL: match not finished (match_id=%d)", match_id);
-        send_status(client_sock, "351 RESULT_FAIL incomplete_game\r\n");
-        return -1;
-    }
-    
-    pthread_mutex_unlock(&matches_mutex);
-    
-    // Log the result with board state
-    char board_str[256] = "";
-    for (int i = 0; i < BOARD_N; i++) {
-        for (int j = 0; j < BOARD_N; j++) {
-            char cell[4];
-            snprintf(cell, sizeof(cell), "%d ", m->board[i][j]);
-            strcat(board_str, cell);
-        }
-        strcat(board_str, "| ");
-    }
-    
-    log_message("GAME RESULT: match_id=%d winner=%d result=%s board=[%s]", match_id, m->winner, result, board_str);
-    send_status(client_sock, "160 RESULT_OK\r\n");
     return 1;
 }
 
@@ -449,19 +402,6 @@ void handle_line(int client_sock, const char *line) {
             return;
         } else {
             send_status(client_sock, "244 MOVE_FAIL format_error\r\n");
-            return;
-        }
-    }
-
-    // RESULT command
-    if (strncmp(line, "RESULT", 6) == 0) {
-        int match_id;
-        char result[64];
-        if (sscanf(line, "RESULT match %d %63s", &match_id, result) == 2) {
-            process_result(client_sock, match_id, result);
-            return;
-        } else {
-            send_status(client_sock, "350 RESULT_FAIL format_error\r\n");
             return;
         }
     }
