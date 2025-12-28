@@ -333,6 +333,105 @@ static int process_move(int client_sock, int match_id, int r, int c) {
     return 1;
 }
 
+// Process RESULT command - log game result
+static int process_result(int client_sock, int match_id, const char *result) {
+    if (strlen(result) == 0) {
+        send_status(client_sock, "350 RESULT_FAIL format_error\r\n");
+        return -1;
+    }
+    
+    pthread_mutex_lock(&matches_mutex);
+    match_t *m = find_match_locked(match_id);
+    if (!m) {
+        pthread_mutex_unlock(&matches_mutex);
+        log_message("RESULT FAIL: match not found (match_id=%d)", match_id);
+        send_status(client_sock, "350 RESULT_FAIL match_not_found\r\n");
+        return -1;
+    }
+    
+    int idx = -1;
+    if (m->players[0] == client_sock) idx = 0;
+    else if (m->players[1] == client_sock) idx = 1;
+    
+    if (idx == -1) {
+        pthread_mutex_unlock(&matches_mutex);
+        log_message("RESULT FAIL: player not in match (match_id=%d)", match_id);
+        send_status(client_sock, "350 RESULT_FAIL not_in_match\r\n");
+        return -1;
+    }
+    
+    if (!m->is_finished) {
+        pthread_mutex_unlock(&matches_mutex);
+        log_message("RESULT FAIL: match not finished (match_id=%d)", match_id);
+        send_status(client_sock, "351 RESULT_FAIL incomplete_game\r\n");
+        return -1;
+    }
+    
+    pthread_mutex_unlock(&matches_mutex);
+    
+    // Log the result with board state
+    char board_str[256] = "";
+    for (int i = 0; i < BOARD_N; i++) {
+        for (int j = 0; j < BOARD_N; j++) {
+            char cell[4];
+            snprintf(cell, sizeof(cell), "%d ", m->board[i][j]);
+            strcat(board_str, cell);
+        }
+        strcat(board_str, "| ");
+    }
+    
+    log_message("GAME RESULT: match_id=%d winner=%d result=%s board=[%s]", match_id, m->winner, result, board_str);
+    send_status(client_sock, "160 RESULT_OK\r\n");
+    return 1;
+}
+
+// Process STOP command - stop/cancel a match
+static int process_stop(int client_sock, int match_id) {
+    pthread_mutex_lock(&matches_mutex);
+    match_t *m = find_match_locked(match_id);
+    if (!m) {
+        pthread_mutex_unlock(&matches_mutex);
+        log_message("STOP FAIL: match not found (match_id=%d)", match_id);
+        send_status(client_sock, "360 STOP_FAIL match_not_found\r\n");
+        return -1;
+    }
+    
+    int idx = -1;
+    if (m->players[0] == client_sock) idx = 0;
+    else if (m->players[1] == client_sock) idx = 1;
+    
+    if (idx == -1) {
+        pthread_mutex_unlock(&matches_mutex);
+        log_message("STOP FAIL: player not in match (match_id=%d)", match_id);
+        send_status(client_sock, "360 STOP_FAIL not_in_match\r\n");
+        return -1;
+    }
+    
+    int opponent = m->players[1 - idx];
+    
+    // Remove match from list
+    match_t **pp = &matches;
+    while (*pp) {
+        if ((*pp)->id == match_id) {
+            match_t *tmp = *pp;
+            *pp = tmp->next;
+            log_message("STOP OK: match stopped (match_id=%d, initiator_idx=%d)", match_id, idx);
+            free(tmp);
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    pthread_mutex_unlock(&matches_mutex);
+    
+    send_status(client_sock, "170 STOP_OK\r\n");
+    if (opponent != 0) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "171 MATCH_STOPPED match %d\r\n", match_id);
+        send_status(opponent, buf);
+    }
+    return 1;
+}
+
 // Handle a single line from client
 void handle_line(int client_sock, const char *line) {
     // MOVE command
@@ -350,6 +449,31 @@ void handle_line(int client_sock, const char *line) {
             return;
         } else {
             send_status(client_sock, "244 MOVE_FAIL format_error\r\n");
+            return;
+        }
+    }
+
+    // RESULT command
+    if (strncmp(line, "RESULT", 6) == 0) {
+        int match_id;
+        char result[64];
+        if (sscanf(line, "RESULT match %d %63s", &match_id, result) == 2) {
+            process_result(client_sock, match_id, result);
+            return;
+        } else {
+            send_status(client_sock, "350 RESULT_FAIL format_error\r\n");
+            return;
+        }
+    }
+
+    // STOP command
+    if (strncmp(line, "STOP", 4) == 0) {
+        int match_id;
+        if (sscanf(line, "STOP match %d", &match_id) == 1) {
+            process_stop(client_sock, match_id);
+            return;
+        } else {
+            send_status(client_sock, "360 STOP_FAIL format_error\r\n");
             return;
         }
     }
