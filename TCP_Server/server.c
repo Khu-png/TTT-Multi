@@ -288,7 +288,7 @@ static int process_move(int client_sock, int match_id, int r, int c) {
         return 0;
     }
 
-    // Make the move and log it
+    // Make the move
     m->board[r][c] = idx + 1;
     int opponent = m->players[1 - idx];
     int is_win = check_win(m, idx); 
@@ -309,16 +309,13 @@ static int process_move(int client_sock, int match_id, int r, int c) {
         snprintf(buf, sizeof(buf), "OPPONENT_MOVE row %d col %d\r\n", r, c);
         send_status(opponent, buf); 
     }
-
-    // send match result if win
+    
     if (is_win) {
         char winner_msg[256];
         char loser_msg[256];
         snprintf(winner_msg, sizeof(winner_msg), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
         snprintf(loser_msg, sizeof(loser_msg), "160 MATCH_RESULT id %d result LOSE\r\n", match_id);
-        /* send WIN to the mover (winner) */
         send_status(client_sock, winner_msg);
-        /* send LOSE to the opponent if present */
         if (opponent != 0) {
             send_status(opponent, loser_msg);
         }
@@ -346,7 +343,7 @@ static int process_stop(int client_sock, int match_id) {
     if (!m) {
         pthread_mutex_unlock(&matches_mutex);
         log_message("STOP FAIL: match not found (match_id=%d)", match_id);
-        send_status(client_sock, "361 STOP_FAIL match_not_found\r\n");
+        send_status(client_sock, "360 STOP_FAIL match_not_found\r\n");
         return -1;
     }
     
@@ -357,7 +354,7 @@ static int process_stop(int client_sock, int match_id) {
     if (idx == -1) {
         pthread_mutex_unlock(&matches_mutex);
         log_message("STOP FAIL: player not in match (match_id=%d)", match_id);
-        send_status(client_sock, "362 STOP_FAIL not_in_match\r\n");
+        send_status(client_sock, "360 STOP_FAIL not_in_match\r\n");
         return -1;
     }
     
