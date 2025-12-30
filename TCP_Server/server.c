@@ -313,8 +313,8 @@ static int process_move(int client_sock, int match_id, int r, int c) {
     if (is_win) {
         char winner_msg[256];
         char loser_msg[256];
-        snprintf(winner_msg, sizeof(winner_msg), "160 MATCH_RESULT id %d result WIN\r\n", match_id);
-        snprintf(loser_msg, sizeof(loser_msg), "160 MATCH_RESULT id %d result LOSE\r\n", match_id);
+        snprintf(winner_msg, sizeof(winner_msg), "160 MATCH_RESULT id %d result WIN\nPress Enter to continue...\r\n", match_id);
+        snprintf(loser_msg, sizeof(loser_msg), "160 MATCH_RESULT id %d result LOSE\nPress Enter to continue...\r\n", match_id);
         send_status(client_sock, winner_msg);
         if (opponent != 0) {
             send_status(opponent, loser_msg);
