@@ -24,6 +24,16 @@ void trim_newline(char *s) {
 
 // Global login flag updated by receiver thread
 volatile int logged_in = 0;
+volatile int current_match_id = -1;
+volatile int in_game = 0;
+volatile int game_over = 0;
+
+struct move {
+    int row, col, player; // 0: self, 1: opponent
+};
+
+struct move game_log[9];
+int move_count = 0;
 
 // Receiver thread: đọc mọi thông điệp từ server và in ra
 void *recv_thread(void *arg) {
@@ -39,7 +49,34 @@ void *recv_thread(void *arg) {
         buf[n] = '\0';
         // cập nhật trạng thái đăng nhập nếu server trả về LOGIN_OK / LOGOUT_OK
         if (strstr(buf, "LOGIN_OK")) logged_in = 1;
-        if (strstr(buf, "LOGOUT_OK")) logged_in = 0;
+        if (strstr(buf, "LOGOUT_OK")) {
+            logged_in = 0;
+            current_match_id = -1;
+            move_count = 0;
+            in_game = 0;
+            game_over = 0;
+        }
+        if (strstr(buf, "MATCH_RESULT")) {
+            game_over = 1;
+            in_game = 0;
+        }
+        if (strstr(buf, "MATCH_STOPPED")) {
+            current_match_id = -1;
+            move_count = 0;
+            in_game = 0;
+            game_over = 0;
+        }
+        if (strstr(buf, "OPPONENT_MOVE")) {
+            int r, c;
+            if (sscanf(buf, "OPPONENT_MOVE row %d col %d", &r, &c) == 2) {
+                if (move_count < 9) {
+                    game_log[move_count].row = r;
+                    game_log[move_count].col = c;
+                    game_log[move_count].player = 1;
+                    move_count++;
+                }
+            }
+        }
         // In nguyên thông điệp nhận được
         printf("\n[SERVER] %s", buf);
         fflush(stdout);
@@ -83,10 +120,18 @@ int main(int argc, char *argv[]) {
         if (!logged_in) {
             printf("1. REGISTER\n2. LOGIN\n3. QUIT\nChoice: ");
         } else {
-            printf("1. LOGOUT\n2. MAKE MOVE\n3. STOP\n4. QUIT\nChoice: ");
+            if (!in_game && !game_over) {
+                printf("1. LOGOUT\n2. MAKE MOVE\n3. STOP\n4. QUIT\nChoice: ");
+            } else if (in_game) {
+                printf("Make move (column row), 3 to stop: ");
+            } else if (game_over) {
+                printf("Game over! L to view log, Q to quit to menu: ");
+            }
         }
-        if (scanf("%d", &choice) != 1) { getchar(); continue; }
-        getchar(); // consume newline
+        if (!logged_in || (!in_game && !game_over)) {
+            if (scanf("%d", &choice) != 1) { getchar(); continue; }
+            getchar(); // consume newline
+        }
 
         if (!logged_in) {
             if (choice == 3) break;
@@ -111,30 +156,90 @@ int main(int argc, char *argv[]) {
             while (choice==2 && !logged_in && waited < 2000) { usleep(100000); waited += 100; }
             // Nếu đăng nhập không thành công, thông điệp lỗi đã được in bởi recv_thread
         } else { // logged_in menu
-            if (choice==1) {
-                send_all(sock, "LOGOUT\r\n", 8);
-                // recv_thread sẽ in LOGOUT_OK và cập nhật logged_in
-                int waited = 0;
-                while (logged_in && waited < 2000) { usleep(100000); waited += 100; }
-            } else if (choice==2) {
-                int match_id, r, c;
-                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; } 
-                printf("Row (0-based): "); if (scanf("%d", &r)!=1) { getchar(); printf("Invalid\n"); continue; }
-                printf("Col (0-based): "); if (scanf("%d", &c)!=1) { getchar(); printf("Invalid\n"); continue; }
-                getchar(); 
-                char line[BUF_SIZE];
-                snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", match_id, r, c);
-                send_all(sock, line, strlen(line));
-            } else if (choice==3) {
-                // STOP
-                int match_id;
-                printf("Match id: "); if (scanf("%d", &match_id)!=1) { getchar(); printf("Invalid\n"); continue; }
-                getchar();
-                char line[BUF_SIZE];
-                snprintf(line, sizeof(line), "STOP match %d\r\n", match_id);
-                send_all(sock, line, strlen(line));
-            } else if (choice==4) break;
-            else printf("Invalid choice\n");
+            if (!in_game && !game_over) {
+                if (choice==1) {
+                    send_all(sock, "LOGOUT\r\n", 8);
+                    // recv_thread sẽ in LOGOUT_OK và cập nhật logged_in
+                    int waited = 0;
+                    while (logged_in && waited < 2000) { usleep(100000); waited += 100; }
+                } else if (choice==2) {
+                    // MAKE MOVE
+                    if (current_match_id == -1) {
+                        printf("Match id: "); 
+                        if (scanf("%d", &current_match_id) != 1) { 
+                            getchar(); 
+                            printf("Invalid match id\n"); 
+                            current_match_id = -1;
+                            continue; 
+                        }
+                        getchar(); // consume newline
+                    }
+                    in_game = 1;
+                } else if (choice==3) {
+                    // STOP
+                    if (current_match_id == -1) {
+                        printf("Match id: "); 
+                        if (scanf("%d", &current_match_id) != 1) { 
+                            getchar(); 
+                            printf("Invalid match id\n"); 
+                            current_match_id = -1;
+                            continue; 
+                        }
+                        getchar();
+                    }
+                    char line[BUF_SIZE];
+                    snprintf(line, sizeof(line), "STOP match %d\r\n", current_match_id);
+                    send_all(sock, line, strlen(line));
+                    current_match_id = -1;
+                    move_count = 0;
+                    in_game = 0;
+                } else if (choice==4) break;
+                else printf("Invalid choice\n");
+            } else if (in_game) {
+                char input[32];
+                fgets(input, sizeof(input), stdin);
+                trim_newline(input);
+                if (strcmp(input, "3") == 0) {
+                    char line[BUF_SIZE];
+                    snprintf(line, sizeof(line), "STOP match %d\r\n", current_match_id);
+                    send_all(sock, line, strlen(line));
+                    current_match_id = -1;
+                    move_count = 0;
+                    in_game = 0;
+                } else {
+                    int c, r;
+                    if (sscanf(input, "%d %d", &c, &r) == 2) {
+                        char line[BUF_SIZE];
+                        snprintf(line, sizeof(line), "MOVE match %d row %d col %d\r\n", current_match_id, r, c);
+                        send_all(sock, line, strlen(line));
+                        // lưu move của mình
+                        if (move_count < 9) {
+                            game_log[move_count].row = r;
+                            game_log[move_count].col = c;
+                            game_log[move_count].player = 0;
+                            move_count++;
+                        }
+                    } else {
+                        printf("Invalid input. Use 'column row' or '3' to stop.\n");
+                    }
+                }
+            } else if (game_over) {
+                char input[32];
+                fgets(input, sizeof(input), stdin);
+                trim_newline(input);
+                if (strcmp(input, "L") == 0 || strcmp(input, "l") == 0) {
+                    printf("Game Log:\n");
+                    for (int i = 0; i < move_count; i++) {
+                        printf("Player %d: row %d col %d\n", game_log[i].player, game_log[i].row, game_log[i].col);
+                    }
+                } else if (strcmp(input, "Q") == 0 || strcmp(input, "q") == 0) {
+                    current_match_id = -1;
+                    move_count = 0;
+                    game_over = 0;
+                } else {
+                    printf("Invalid input. Press L to view log or Q to quit to menu.\n");
+                }
+            }
         }
     }
 
